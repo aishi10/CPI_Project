@@ -1,811 +1,291 @@
-from datetime import datetime
-import re
-
-
-# ============================================================
-# MEMORY LAYER
-# ============================================================
-
-memory = []
-revision_history = []
-
-
-def add_memory(subject, fact, confidence, source):
-    memory.append({
-        "subject": subject,
-        "fact": fact,
-        "confidence": confidence,
-        "source": source,
-        "status": "active"
-    })
-
-
-def get_memories(subject):
-    return [
-        m for m in memory
-        if m["subject"].lower() == subject.lower()
-    ]
-
-
-# ============================================================
-# EVIDENCE LAYER
-# ============================================================
-
-def add_evidence(
-    subject,
-    fact,
-    strength,
-    source,
-    reliability,
-    evidence_date,
-    valid_until=None,
-    source_group=None
-):
-    return {
-        "subject": subject,
-        "fact": fact,
-        "strength": strength,
-        "source": source,
-        "reliability": reliability,
-        "evidence_date": evidence_date,
-        "valid_until": valid_until,
-        "source_group": source_group
-    }
-
-
-# ============================================================
-# SOURCE INDEPENDENCE
-# ============================================================
-
-def calculate_source_independence(evidence_list):
-
-    source_groups = set()
-
-    for evidence in evidence_list:
-
-        if evidence["source_group"] is not None:
-            source_groups.add(
-                evidence["source_group"]
-            )
-
-    if len(source_groups) == 0:
-        return 0.0
-
-    return min(
-        len(source_groups) / 3,
-        1.0
-    )
-
-
-# ============================================================
-# RECENCY
-# ============================================================
-
-def calculate_recency(evidence_date):
-
-    today = datetime.now().date()
-
-    evidence_day = datetime.strptime(
-        evidence_date,
-        "%Y-%m-%d"
-    ).date()
-
-    age_days = (
-        today - evidence_day
-    ).days
-
-    if age_days <= 7:
-        return 1.0
-
-    elif age_days <= 30:
-        return 0.9
-
-    elif age_days <= 90:
-        return 0.7
-
-    elif age_days <= 365:
-        return 0.5
-
-    else:
-        return 0.2
-
-
-# ============================================================
-# TEMPORAL VALIDITY
-# ============================================================
-
-def calculate_temporal_validity(valid_until):
-
-    if valid_until is None:
-        return 1.0
-
-    today = datetime.now().date()
-
-    expiry_date = datetime.strptime(
-        valid_until,
-        "%Y-%m-%d"
-    ).date()
-
-    if today <= expiry_date:
-        return 1.0
-
-    return 0.0
-
-
-# ============================================================
-# TEXT NORMALIZATION
-# ============================================================
-
-def normalize_text(text):
-
-    text = text.lower()
-
-    filler_words = [
-        "the",
-        "a",
-        "an",
-        "now",
-        "currently",
-        "is",
-        "are",
-        "was",
-        "were"
-    ]
-
-    words = text.split()
-
-    words = [
-        word
-        for word in words
-        if word not in filler_words
-    ]
-
-    return " ".join(words)
-
-
-# ============================================================
-# TIME EXTRACTION
-# ============================================================
-
-def extract_time(text):
-
-    pattern = r'(\d{1,2})(?::(\d{2}))?\s*(am|pm)'
-
-    match = re.search(
-        pattern,
-        text.lower()
-    )
-
-    if match:
-
-        hour = int(match.group(1))
-
-        minute = (
-            int(match.group(2))
-            if match.group(2)
-            else 0
-        )
-
-        period = match.group(3)
-
-        return hour, minute, period
-
-    return None
-
-
-# ============================================================
-# NUMBER EXTRACTION
-# ============================================================
-
-def extract_number(text):
-
-    pattern = r'(-?\d+(?:\.\d+)?)'
-
-    match = re.search(
-        pattern,
-        text
-    )
-
-    if match:
-        return float(match.group(1))
-
-    return None
-
-
-# ============================================================
-# CONTRADICTION DETECTION
-# ============================================================
-
-def detect_contradiction(memory, evidence):
-
-    memory_fact = memory["fact"].lower()
-    evidence_fact = evidence["fact"].lower()
-
-    # --------------------------------------------------------
-    # 1. TIME
-    # --------------------------------------------------------
-
-    memory_time = extract_time(memory_fact)
-    evidence_time = extract_time(evidence_fact)
-
-    if memory_time and evidence_time:
-
-        if memory_time != evidence_time:
-            return True
-
-        return False
-
-    # --------------------------------------------------------
-    # 2. OPEN / CLOSED
-    # --------------------------------------------------------
-
-    open_words = [
-        "open",
-        "opened",
-        "available",
-        "accessible"
-    ]
-
-    closed_words = [
-        "closed",
-        "shut",
-        "unavailable",
-        "inaccessible"
-    ]
-
-    memory_open = any(
-        word in memory_fact
-        for word in open_words
-    )
-
-    memory_closed = any(
-        word in memory_fact
-        for word in closed_words
-    )
-
-    evidence_open = any(
-        word in evidence_fact
-        for word in open_words
-    )
-
-    evidence_closed = any(
-        word in evidence_fact
-        for word in closed_words
-    )
-
-    if memory_open and evidence_closed:
-        return True
-
-    if memory_closed and evidence_open:
-        return True
-
-    # --------------------------------------------------------
-    # 3. YES / NO
-    # --------------------------------------------------------
-
-    positive_words = [
-        "yes",
-        "true",
-        "allowed",
-        "enabled",
-        "supports"
-    ]
-
-    negative_words = [
-        "no",
-        "false",
-        "not allowed",
-        "disabled",
-        "does not support"
-    ]
-
-    memory_positive = any(
-        word in memory_fact
-        for word in positive_words
-    )
-
-    memory_negative = any(
-        word in memory_fact
-        for word in negative_words
-    )
-
-    evidence_positive = any(
-        word in evidence_fact
-        for word in positive_words
-    )
-
-    evidence_negative = any(
-        word in evidence_fact
-        for word in negative_words
-    )
-
-    if memory_positive and evidence_negative:
-        return True
-
-    if memory_negative and evidence_positive:
-        return True
-
-    # --------------------------------------------------------
-    # 4. NUMERIC VALUES
-    # --------------------------------------------------------
-
-    memory_number = extract_number(memory_fact)
-    evidence_number = extract_number(evidence_fact)
-
-    if (
-        memory_number is not None
-        and evidence_number is not None
-    ):
-
-        if memory_number != evidence_number:
-
-            memory_words = set(
-                normalize_text(memory_fact).split()
-            )
-
-            evidence_words = set(
-                normalize_text(evidence_fact).split()
-            )
-
-            common_words = (
-                memory_words.intersection(
-                    evidence_words
-                )
-            )
-
-            if len(common_words) >= 2:
-                return True
-
-    # --------------------------------------------------------
-    # 5. LOCATION
-    # --------------------------------------------------------
-
-    location_patterns = [
-        r'lives in ([a-z ]+)',
-        r'located in ([a-z ]+)',
-        r'based in ([a-z ]+)',
-        r'from ([a-z ]+)'
-    ]
-
-    for pattern in location_patterns:
-
-        memory_match = re.search(
-            pattern,
-            memory_fact
-        )
-
-        evidence_match = re.search(
-            pattern,
-            evidence_fact
-        )
-
-        if memory_match and evidence_match:
-
-            memory_location = (
-                memory_match.group(1).strip()
-            )
-
-            evidence_location = (
-                evidence_match.group(1).strip()
-            )
-
-            if memory_location != evidence_location:
-                return True
-
-    return False
-
-
-# ============================================================
-# SINGLE EVIDENCE EVALUATION
-# ============================================================
-
-def evaluate_evidence(memory, evidence):
-
-    contradicts = detect_contradiction(
-        memory,
-        evidence
-    )
-
-    recency = calculate_recency(
-        evidence["evidence_date"]
-    )
-
-    temporal_validity = calculate_temporal_validity(
-        evidence["valid_until"]
-    )
-
-    evidence_score = (
-        0.4 * evidence["strength"]
-        + 0.3 * evidence["reliability"]
-        + 0.2 * recency
-        + 0.1 * temporal_validity
-    )
-
-    return {
-        "evidence_score": evidence_score,
-        "recency": recency,
-        "temporal_validity": temporal_validity,
-        "contradicts": contradicts
-    }
-
-
-# ============================================================
-# GROUP EVIDENCE BY FACT
-# ============================================================
-
-def group_evidence_by_fact(evidence_list):
-
-    groups = {}
-
-    for evidence in evidence_list:
-
-        fact = normalize_text(
-            evidence["fact"]
-        )
-
-        if fact not in groups:
-            groups[fact] = []
-
-        groups[fact].append(evidence)
-
-    return groups
-
-
-# ============================================================
-# SCORE EACH COMPETING BELIEF
-# ============================================================
-
-def score_evidence_group(
-    memory,
-    evidence_group
-):
-
-    total_score = 0
-
-    source_groups = set()
-
-    evaluations = []
-
-    for evidence in evidence_group:
-
-        evaluation = evaluate_evidence(
-            memory,
-            evidence
-        )
-
-        evaluations.append(
-            evaluation
-        )
-
-        total_score += (
-            evaluation["evidence_score"]
-        )
-
-        if evidence["source_group"] is not None:
-            source_groups.add(
-                evidence["source_group"]
-            )
-
-    # Average strength of evidence supporting
-    # this particular fact
-    average_score = (
-        total_score / len(evidence_group)
-    )
-
-    # Number of independent source groups
-    independent_sources = len(
-        source_groups
-    )
-
-    # Independence bonus
-    independence_score = min(
-        independent_sources / 3,
-        1.0
-    )
-
-    # Final support score
-    support_score = (
-        0.7 * average_score
-        + 0.3 * independence_score
-    )
-
-    return {
-        "evidence": evidence_group,
-        "evaluations": evaluations,
-        "average_score": average_score,
-        "independent_sources": independent_sources,
-        "independence_score": independence_score,
-        "support_score": support_score
-    }
-
-
-# ============================================================
-# COMPARE COMPETING BELIEFS
-# ============================================================
-
-def evaluate_competing_evidence(
-    memory,
-    evidence_list
-):
-
-    groups = group_evidence_by_fact(
-        evidence_list
-    )
-
-    scored_groups = []
-
-    for fact, evidence_group in groups.items():
-
-        result = score_evidence_group(
-            memory,
-            evidence_group
-        )
-
-        result["fact"] = fact
-
-        scored_groups.append(
-            result
-        )
-
-    # Sort strongest belief first
-    scored_groups.sort(
-        key=lambda x: x["support_score"],
-        reverse=True
-    )
-
-    return scored_groups
-
-
-# ============================================================
-# REVISION DECISION
-# ============================================================
-
-def decide_multiple_evidence_revision(
-    memory,
-    evidence_list
-):
-
-    scored_groups = evaluate_competing_evidence(
-        memory,
-        evidence_list
-    )
-
-    if len(scored_groups) == 0:
-        return {
-            "decision": "discard",
-            "winning_fact": None,
-            "support_score": 0
+"""
+Part 1 - Memory Store & Data Model
+Adaptive Memory Evolution through Evidence-Based Revision
+
+Holds every belief as a Memory Object (shared schema), keeps a full version
+history, and exposes the operations Parts 2-4 need.
+
+Memory Object:
+    memory_id, content, confidence (0-1), created_at, last_updated,
+    source, version, history[], status (active | deprecated | merged),
+    replaces[] (ids of beliefs this one replaced), superseded_by (id or None)
+    replaces / superseded_by are link metadata: changing them does not bump version.
+
+History entry (matches Part 3's apply_decision):
+    {"version", "confidence", "content", "updated_at", "reason"}
+    "reason" explains why that version was REPLACED (the update that followed it).
+"""
+
+import copy
+import json
+from datetime import datetime, timezone
+from typing import Callable, Dict, List, Optional, Tuple, Union
+
+from similarity import jaccard_similarity
+
+VALID_STATUSES = {"active", "deprecated", "merged"}
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _check_confidence(value: float) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0.0 <= value <= 1.0:
+        raise ValueError(f"confidence must be a number in [0, 1], got {value!r}")
+    return float(value)
+
+
+class MemoryStore:
+    def __init__(self, similarity: Optional[Callable[[str, str], float]] = None,
+                 dedupe_threshold: float = 0.8):
+        """
+        similarity(a, b) -> 0..1 ranks memories in find_memories (default: word-overlap Jaccard).
+        dedupe_threshold: replace_memory reuses an active belief at least this similar instead of
+        creating a near-duplicate.
+        """
+        self._dedupe = dedupe_threshold
+        self._memories: Dict[str, dict] = {}
+        self._counter = 0
+        self._sim = similarity or jaccard_similarity
+
+    # ------------------------------------------------------------------
+    # Create / read
+    # ------------------------------------------------------------------
+
+    def add_memory(self, content: str, source: str, confidence: float = 0.5) -> dict:
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError("content must be a non-empty string")
+        confidence = _check_confidence(confidence)
+
+        self._counter += 1
+        now = _now()
+        memory = {
+            "memory_id": f"mem_{self._counter:04d}",
+            "content": content.strip(),
+            "confidence": confidence,
+            "created_at": now,
+            "last_updated": now,
+            "source": source,
+            "version": 1,
+            "history": [],
+            "status": "active",
+            "replaces": [],
+            "superseded_by": None,
         }
+        self._memories[memory["memory_id"]] = memory
+        return copy.deepcopy(memory)
 
-    winner = scored_groups[0]
+    def get_memory(self, memory_id: str) -> Optional[dict]:
+        m = self._memories.get(memory_id)
+        return copy.deepcopy(m) if m else None
 
-    # Strong winning belief
-    if winner["support_score"] >= 0.85:
+    def list_memories(self, status: Optional[str] = "active") -> List[dict]:
+        """All memories with the given status (None = every status), oldest first."""
+        if status is not None and status not in VALID_STATUSES:
+            raise ValueError(f"status must be one of {sorted(VALID_STATUSES)}")
+        return [copy.deepcopy(m) for m in self._memories.values()
+                if status is None or m["status"] == status]
 
-        return {
-            "decision": "revise",
-            "winning_fact": winner["fact"],
-            "support_score": winner["support_score"],
-            "winning_group": winner,
-            "all_groups": scored_groups
-        }
+    def get_history(self, memory_id: str) -> List[dict]:
+        """Past versions plus the current one, oldest first."""
+        m = self._require(memory_id)
+        current = {"version": m["version"], "confidence": m["confidence"],
+                   "content": m["content"], "updated_at": m["last_updated"],
+                   "reason": "current"}
+        return copy.deepcopy(m["history"]) + [current]
 
-    # Medium confidence
-    elif winner["support_score"] >= 0.60:
+    def find_memories_scored(self, query: str, limit: int = 5,
+                             status: Optional[str] = "active") -> List[Tuple[dict, float]]:
+        """(memory, similarity) pairs, best first. Zero-similarity memories are left out."""
+        scored = []
+        for m in self.list_memories(status):
+            score = self._sim(query, m["content"])
+            if score > 0:
+                scored.append((m, score))
+        scored.sort(key=lambda x: x[1], reverse=True)
+        return scored[:limit]
 
-        return {
-            "decision": "remain_uncertain",
-            "winning_fact": winner["fact"],
-            "support_score": winner["support_score"],
-            "winning_group": winner,
-            "all_groups": scored_groups
-        }
+    def find_memories(self, query: str, limit: int = 5, status: Optional[str] = "active") -> List[dict]:
+        """Memories most similar to `query`; use to pick the target of new information."""
+        return [m for m, _ in self.find_memories_scored(query, limit, status)]
 
-    # Weak evidence
-    else:
+    # ------------------------------------------------------------------
+    # Update (always versioned)
+    # ------------------------------------------------------------------
 
-        return {
-            "decision": "discard",
-            "winning_fact": winner["fact"],
-            "support_score": winner["support_score"],
-            "winning_group": winner,
-            "all_groups": scored_groups
-        }
+    def update_memory(self, memory_id: str, new_content: Optional[str] = None,
+                      new_confidence: Optional[float] = None, status: Optional[str] = None,
+                      reason: str = "") -> dict:
+        """
+        Apply a change. The previous state is pushed onto history and the version
+        increments. Passing nothing to change raises, so versions never bump for no reason.
+        """
+        m = self._require(memory_id)
 
+        if new_content is None and new_confidence is None and status is None:
+            raise ValueError("nothing to update")
+        if new_content is not None and (not isinstance(new_content, str) or not new_content.strip()):
+            raise ValueError("new_content must be a non-empty string")
+        if new_confidence is not None:
+            new_confidence = _check_confidence(new_confidence)
+        if status is not None and status not in VALID_STATUSES:
+            raise ValueError(f"status must be one of {sorted(VALID_STATUSES)}")
 
-# ============================================================
-# ACTUAL MEMORY REVISION
-# ============================================================
+        m["history"].append({
+            "version": m["version"],
+            "confidence": m["confidence"],
+            "content": m["content"],
+            "updated_at": m["last_updated"],
+            "reason": reason or "update",
+        })
+        if new_content is not None:
+            m["content"] = new_content.strip()
+        if new_confidence is not None:
+            m["confidence"] = new_confidence
+        if status is not None:
+            m["status"] = status
+        m["version"] += 1
+        m["last_updated"] = _now()
+        return copy.deepcopy(m)
 
-def revise_memory(memory, evidence):
+    def apply_decision(self, decision: dict) -> dict:
+        """
+        Execute a Revision Decision from Part 3:
+            {memory_id, action, new_confidence, new_content, reason}
+        update_confidence / overwrite -> update; deprecate -> update + status deprecated;
+        no_change -> returns the memory untouched (no version bump).
+        """
+        required = {"memory_id", "action"}
+        if not required <= set(decision):
+            raise ValueError(f"decision missing fields: {sorted(required - set(decision))}")
 
-    old_fact = memory["fact"]
+        mid, action = decision["memory_id"], decision["action"]
+        reason = decision.get("reason", "")
+        m = self._require(mid)
 
-    memory["fact"] = evidence["fact"]
+        if action == "no_change":
+            return copy.deepcopy(m)
+        if action in ("update_confidence", "overwrite"):
+            return self.update_memory(mid, decision.get("new_content"),
+                                      decision.get("new_confidence"), reason=reason)
+        if action == "deprecate":
+            rep = decision.get("replacement")
+            if rep is not None:   # validate first so a bad replacement cannot leave a half-applied change
+                if not isinstance(rep, dict) or not isinstance(rep.get("content"), str) or not rep["content"].strip():
+                    raise ValueError("replacement needs a non-empty 'content'")
+                _check_confidence(rep.get("confidence", 0.5))
+                if m.get("superseded_by"):
+                    raise ValueError(f"{mid} is already superseded by {m['superseded_by']}")
+            self.update_memory(mid, decision.get("new_content"),
+                               decision.get("new_confidence"), status="deprecated", reason=reason)
+            if rep is not None:
+                self.replace_memory(mid, rep["content"], rep.get("confidence", 0.5), reason=reason)
+            return copy.deepcopy(self._memories[mid])   # carries superseded_by when a replacement exists
+        raise ValueError(f"unknown action {action!r}")
 
-    memory["confidence"] = evidence["strength"]
+    def replace_memory(self, old_id: str, new_content: str, confidence: float = 0.5,
+                       reason: str = "") -> dict:
+        """
+        Retire `old_id` (if still active) and link it to the belief that takes its place.
+        If an active belief is already at least `dedupe_threshold` similar to `new_content`, that
+        belief is reused instead of creating a near-duplicate. Returns the replacement.
+        """
+        old = self._require(old_id)
+        if old.get("superseded_by"):
+            raise ValueError(f"{old_id} is already superseded by {old['superseded_by']}")
+        if not isinstance(new_content, str) or not new_content.strip():
+            raise ValueError("new_content must be a non-empty string")
+        confidence = _check_confidence(confidence)
 
-    memory["source"] = evidence["source"]
+        if old["status"] == "active":
+            self.update_memory(old_id, status="deprecated", reason=reason or "replaced")
 
-    return old_fact, memory
+        dup = None
+        best = 0.0
+        for m in self._memories.values():
+            if m["status"] != "active" or m["memory_id"] == old_id:
+                continue
+            score = self._sim(new_content, m["content"])
+            if score >= self._dedupe and score > best:
+                dup, best = m, score
 
+        if dup is not None:
+            target = dup
+        else:
+            created = self.add_memory(new_content, source=f"replaces:{old_id}", confidence=confidence)
+            target = self._memories[created["memory_id"]]
 
-# ============================================================
-# REVISION HISTORY
-# ============================================================
+        old["superseded_by"] = target["memory_id"]
+        target.setdefault("replaces", [])
+        if old_id not in target["replaces"]:
+            target["replaces"].append(old_id)
+        return copy.deepcopy(target)
 
-def record_revision(
-    old_memory,
-    evidence,
-    evaluation,
-    decision
-):
+    def get_lineage(self, memory_id: str) -> List[dict]:
+        """Chain of beliefs around `memory_id`, oldest first: what it replaced, itself, what replaced it."""
+        m = self._require(memory_id)
+        seen = {memory_id}
+        back, cur = [], m
+        while cur.get("replaces"):
+            prev = cur["replaces"][0]
+            if prev in seen or prev not in self._memories:
+                break
+            seen.add(prev)
+            cur = self._memories[prev]
+            back.append(cur)
+        fwd, cur = [], m
+        while cur.get("superseded_by"):
+            nxt = cur["superseded_by"]
+            if nxt in seen or nxt not in self._memories:
+                break
+            seen.add(nxt)
+            cur = self._memories[nxt]
+            fwd.append(cur)
+        return [copy.deepcopy(x) for x in list(reversed(back)) + [m] + fwd]
 
-    revision_history.append({
+    def mark_merged(self, memory_id: str, into_id: str) -> dict:
+        """Retire a duplicate memory by pointing it at the one that absorbed it."""
+        self._require(into_id)
+        return self.update_memory(memory_id, status="merged", reason=f"merged into {into_id}")
 
-        "old_fact": old_memory["fact"],
+    # ------------------------------------------------------------------
+    # Persistence
+    # ------------------------------------------------------------------
 
-        "new_fact": evidence["fact"],
+    def save(self, path: str) -> None:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"counter": self._counter, "memories": self._memories}, f, indent=2)
 
-        "old_confidence": (
-            old_memory["confidence"]
-        ),
+    @classmethod
+    def load(cls, path: str, similarity=None, dedupe_threshold: float = 0.8) -> "MemoryStore":
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        store = cls(similarity, dedupe_threshold)
+        store._counter = data["counter"]
+        store._memories = data["memories"]
+        return store
 
-        "new_confidence": evidence["strength"],
+    # ------------------------------------------------------------------
 
-        "old_source": (
-            old_memory["source"]
-        ),
+    def _require(self, memory_id: str) -> dict:
+        if memory_id not in self._memories:
+            raise KeyError(f"unknown memory_id {memory_id!r}")
+        return self._memories[memory_id]
 
-        "new_source": evidence["source"],
-
-        "evidence_score": (
-            evaluation["evidence_score"]
-        ),
-
-        "decision": decision
-    })
-
-
-# ============================================================
-# TEST
-# ============================================================
-
-add_memory(
-    "library",
-    "library closes at 6 PM",
-    0.80,
-    "Old library notice"
-)
-
-
-# ------------------------------------------------------------
-# Evidence 1
-# ------------------------------------------------------------
-
-evidence1 = add_evidence(
-    "library",
-    "library closes at 8 PM",
-    0.95,
-    "Official library website",
-    0.95,
-    "2026-10-04",
-    "2026-10-31",
-    "library_authority"
-)
-
-
-# ------------------------------------------------------------
-# Evidence 2
-# ------------------------------------------------------------
-
-evidence2 = add_evidence(
-    "library",
-    "library closes at 8 PM",
-    0.90,
-    "Official library notice",
-    0.90,
-    "2026-10-04",
-    "2026-10-31",
-    "library_authority"
-)
-
-
-# ------------------------------------------------------------
-# Evidence 3
-# ------------------------------------------------------------
-
-evidence3 = add_evidence(
-    "library",
-    "library closes at 10 PM",
-    0.50,
-    "Random online comment",
-    0.30,
-    "2026-10-04",
-    "2026-10-31",
-    "random_user"
-)
-
-
-evidence_list = [
-    evidence1,
-    evidence2,
-    evidence3
-]
-
-
-# ============================================================
-# RUN COMPETING EVIDENCE EVALUATION
-# ============================================================
-
-result = decide_multiple_evidence_revision(
-    memory[0],
-    evidence_list
-)
-
-
-# ============================================================
-# DISPLAY RESULTS
-# ============================================================
-
-print("\nCompeting Evidence Evaluation")
-print("--------------------------------")
-
-print(
-    "Decision:",
-    result["decision"]
-)
-
-print(
-    "Winning fact:",
-    result["winning_fact"]
-)
-
-print(
-    "Winning support score:",
-    result["support_score"]
-)
+    def __len__(self) -> int:
+        return len(self._memories)
 
 
-print("\nCompeting Beliefs")
-print("--------------------------------")
+# Module-level convenience API (matches the signatures in the original contract)
+_default = MemoryStore()
 
+def add_memory(content: str, source: str, confidence: float = 0.5) -> dict:
+    return _default.add_memory(content, source, confidence)
 
-for i, group in enumerate(
-    result["all_groups"],
-    start=1
-):
+def get_memory(memory_id: str) -> Optional[dict]:
+    return _default.get_memory(memory_id)
 
-    print(
-        f"\nBelief {i}:"
-    )
-
-    print(
-        "Fact:",
-        group["evidence"][0]["fact"]
-    )
-
-    print(
-        "Number of evidence items:",
-        len(group["evidence"])
-    )
-
-    print(
-        "Independent source groups:",
-        group["independent_sources"]
-    )
-
-    print(
-        "Average evidence score:",
-        group["average_score"]
-    )
-
-    print(
-        "Independence score:",
-        group["independence_score"]
-    )
-
-    print(
-        "Support score:",
-        group["support_score"]
-    )
+def update_memory(memory_id: str, new_content: Optional[str] = None,
+                  new_confidence: Optional[float] = None, **kw) -> dict:
+    return _default.update_memory(memory_id, new_content, new_confidence, **kw)
